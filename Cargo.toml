@@ -33,3 +33,4 @@ env_logger = "0.6.0"
 
 [features]
 serde_support = []
+evented = []

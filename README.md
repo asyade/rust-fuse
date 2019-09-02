@@ -91,6 +91,11 @@ fuse = "0.4"
 
 To create a new filesystem, implement the trait `fuse::Filesystem`. See the [documentation] for details or the `examples` directory for some basic examples.
 
+## Features
+
+### `serde_support`
+Add `Serialize` and `Deserialize` implementation to `fuse::FileAttr` and `fuse::FileType`
+
 ## To Do
 
 There's still a lot of stuff to be done. Feel free to contribute. See the [list of issues][issues] on GitHub and search the source files for comments containing "`TODO`" or "`FIXME`" to see what's still missing.

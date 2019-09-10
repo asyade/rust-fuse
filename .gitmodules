@@ -1,3 +1,0 @@
-[submodule "fuse-lib"]
-	path = fuse-lib
-	url = https://github.com/libfuse/libfuse.git

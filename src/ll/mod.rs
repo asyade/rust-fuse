@@ -1,6 +1,7 @@
 //! Low-level kernel communication.
 
 mod argument;
-mod request;
 pub mod channel;
+mod request;
 pub use request::{Operation, Request, RequestError};
+pub mod fuse;

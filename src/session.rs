@@ -5,17 +5,17 @@
 //! filesystem is mounted, the session loop receives, dispatches and replies to kernel requests
 //! for filesystem operations under its mount point.
 
-use std::io;
-use std::ffi::OsStr;
-use std::fmt;
-use std::path::{PathBuf, Path};
-use thread_scoped::{scoped, JoinGuard};
 use libc::{EAGAIN, EINTR, ENODEV, ENOENT};
 use log::{error, info};
-use mio::{Evented, Poll, Token, Ready, PollOpt};
 use mio::unix::EventedFd;
+use mio::{Evented, Poll, PollOpt, Ready, Token};
+use std::ffi::OsStr;
+use std::fmt;
+use std::io;
+use std::path::{Path, PathBuf};
+use thread_scoped::{scoped, JoinGuard};
 
-use crate::channel::{self, Channel};
+use crate::channel::{self, Channel, RecvResult};
 use crate::request::Request;
 use crate::Filesystem;
 
@@ -45,29 +45,17 @@ pub struct Session<FS: Filesystem> {
     pub destroyed: bool,
 }
 
-#[derive(Debug)]
-pub enum RecvResult<'a> {
-    // A request has been readed
-    Some(Request<'a>),
-    // No request available but safe to retry
-    Retry,
-    // Filesystem has been unmounted or there is an error, next call to receive should return an error
-    Drop(Option<io::Error>),
-}
-
 impl<FS: Filesystem> Session<FS> {
     /// Create a new session by mounting the given filesystem to the given mountpoint
     pub fn new(filesystem: FS, mountpoint: &Path, options: &[&OsStr]) -> io::Result<Session<FS>> {
         info!("Mounting {}", mountpoint.display());
-        Channel::new(mountpoint, options).map(|ch| {
-            Session {
-                filesystem: filesystem,
-                ch: ch,
-                proto_major: 0,
-                proto_minor: 0,
-                initialized: false,
-                destroyed: false,
-            }
+        Channel::new(mountpoint, options).map(|ch| Session {
+            filesystem: filesystem,
+            ch: ch,
+            proto_major: 0,
+            proto_minor: 0,
+            initialized: false,
+            destroyed: false,
         })
     }
 
@@ -87,47 +75,13 @@ impl<FS: Filesystem> Session<FS> {
         loop {
             // Read the next request from the given channel to kernel driver
             // The kernel driver makes sure that we get exactly one request per read
-            match self.receive(&mut buffer) {
+            match self.ch.receive(&mut buffer) {
                 RecvResult::Some(request) => request.dispatch(self),
                 RecvResult::Retry => continue,
                 RecvResult::Drop(None) => return Ok(()),
                 RecvResult::Drop(Some(err)) => return Err(err),
             }
         }
-    }
-
-    ///
-    /// Read a single request from the fuse channel
-    /// this can be non blocking if `ll::channel::set_nonblocking` is set on the fuse channel
-    /// 
-    #[inline]
-    pub fn receive<'a>(&mut self, buffer: &'a mut Vec<u8>) -> RecvResult<'a> {
-        match self.ch.receive(buffer) {
-            Ok(_) => match Request::new(self.ch.sender(), buffer) {
-                // Return request
-                Some(request) => RecvResult::Some(request),
-                // Should drop on illegal request
-                None => RecvResult::Drop(None),
-            },
-            Err(err) => match err.raw_os_error() {
-                // The operation was interupted by the kernel, the user or fuse explicitly request a retry
-                Some(ENOENT) | Some(EINTR) | Some(EAGAIN) => RecvResult::Retry,
-                // Filesystem was unmounted without error
-                Some(ENODEV) => RecvResult::Drop(None),
-                // Return last os error
-                _ => RecvResult::Drop(Some(err)),
-            }
-        }
-    }
-
-    ///
-    /// Set fuse fd as evented fd (so its can be used with epoll or select)
-    /// Also wrap the `Session` into an `EventedSession` that is usable in the MIO world
-    /// 
-    pub fn evented(mut self) -> io::Result<EventedSession<FS>> {
-        // Set the current session (raw fd) as evented fd
-        self.ch.evented()?;
-        Ok(EventedSession(self))
     }
 }
 
@@ -156,13 +110,18 @@ impl<'a> BackgroundSession<'a> {
     /// Create a new background session for the given session by running its
     /// session loop in a background thread. If the returned handle is dropped,
     /// the filesystem is unmounted and the given session ends.
-    pub unsafe fn new<FS: Filesystem + Send + 'a>(se: Session<FS>) -> io::Result<BackgroundSession<'a>> {
+    pub unsafe fn new<FS: Filesystem + Send + 'a>(
+        se: Session<FS>,
+    ) -> io::Result<BackgroundSession<'a>> {
         let mountpoint = se.mountpoint().to_path_buf();
         let guard = scoped(move || {
             let mut se = se;
             se.run()
         });
-        Ok(BackgroundSession { mountpoint: mountpoint, guard: guard })
+        Ok(BackgroundSession {
+            mountpoint: mountpoint,
+            guard: guard,
+        })
     }
 }
 
@@ -182,7 +141,11 @@ impl<'a> Drop for BackgroundSession<'a> {
 // thread_scoped::JoinGuard
 impl<'a> fmt::Debug for BackgroundSession<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(f, "BackgroundSession {{ mountpoint: {:?}, guard: JoinGuard<()> }}", self.mountpoint)
+        write!(
+            f,
+            "BackgroundSession {{ mountpoint: {:?}, guard: JoinGuard<()> }}",
+            self.mountpoint
+        )
     }
 }
 
@@ -193,36 +156,52 @@ impl<'a> fmt::Debug for BackgroundSession<'a> {
 ///
 // TODO: Drop
 #[derive(Debug)]
-pub struct EventedSession<FS: Filesystem>(Session<FS>);
+pub struct EventedSession(Channel);
 
-impl<FS: Filesystem>  Evented for EventedSession<FS> {
-    fn register(&self, poll: &Poll, token: Token, interest: Ready, opts: PollOpt) -> io::Result<()> {
-        let raw_fd = unsafe {self.0.ch.raw_fd() };
+impl Evented for EventedSession {
+    fn register(
+        &self,
+        poll: &Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
+        let raw_fd = unsafe { self.0.raw_fd() };
         EventedFd(&raw_fd).register(poll, token, interest, opts)
     }
-    fn reregister(&self, poll: &Poll, token: Token, interest: Ready, opts: PollOpt) -> io::Result<()> {
-        let raw_fd = unsafe {self.0.ch.raw_fd() };
+    fn reregister(
+        &self,
+        poll: &Poll,
+        token: Token,
+        interest: Ready,
+        opts: PollOpt,
+    ) -> io::Result<()> {
+        let raw_fd = unsafe { self.0.raw_fd() };
         EventedFd(&raw_fd).reregister(poll, token, interest, opts)
     }
     fn deregister(&self, poll: &Poll) -> io::Result<()> {
-        let raw_fd = unsafe {self.0.ch.raw_fd() };
+        let raw_fd = unsafe { self.0.raw_fd() };
         EventedFd(&raw_fd).deregister(poll)
     }
 }
 
-impl<FS: Filesystem> EventedSession<FS> {
-
+impl EventedSession {
     ///
     /// Read a request from the fuse fd and process it with the filesystem
-    /// 
+    ///
     pub fn try_handle(&mut self, buffer: &mut Vec<u8>) -> io::Result<()> {
         match self.0.receive(buffer) {
-                RecvResult::Some(request) => {
-                    request.dispatch(&mut self.0);
-                    Ok(())
-                },
-                RecvResult::Drop(Some(err)) => Err(err),
-                _ => Ok(())
+            RecvResult::Some(request) => {
+                request.dispatch(&mut self.0);
+                Ok(())
+            }
+            RecvResult::Drop(Some(err)) => Err(err),
+            _ => Ok(()),
         }
+    }
+
+    pub fn new(mountpoint: &Path, options: &[&OsStr]) -> io::Result<Self> {
+        info!("Mounting {}", mountpoint.display());
+        Channel::new(mountpoint, options).map(EventedSession)
     }
 }

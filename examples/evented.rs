@@ -111,7 +111,11 @@ impl Filesystem for HelloFS {
 fn main() -> std::io::Result<()> {
     env_logger::init();
     let mountpoint = env::args_os().nth(1).unwrap();
-    let mut session = fuse::evented(mountpoint, MountOpt::Name("evented")).unwrap();
+    let mut session = fuse::evented(
+        mountpoint,
+        MountOpt::Name("evented") + MountOpt::DefaultPermissions + MountOpt::AllowOther,
+    )
+    .unwrap();
     let poll = Poll::new().unwrap();
     let mut buffer: Vec<u8> = Vec::with_capacity((16 * 1024 * 1024) + 4096);
     let mut events = Events::with_capacity(1024);

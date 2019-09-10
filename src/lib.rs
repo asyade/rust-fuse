@@ -25,7 +25,7 @@ pub use reply::{ReplyBmap, ReplyCreate, ReplyDirectory, ReplyLock, ReplyStatfs, 
 pub use request::Request;
 #[cfg(feature = "serde_support")]
 use serde_derive::{Deserialize, Serialize};
-pub use session::{BackgroundSession, EventedSession, Session};
+pub use session::{EventedSession, Session};
 
 mod channel;
 mod ll;
@@ -556,19 +556,6 @@ pub fn mount<FS: Filesystem, P: AsRef<Path>>(
     options: MountOpt,
 ) -> io::Result<()> {
     Session::new(filesystem, mountpoint.as_ref(), options).and_then(|mut se| se.run())
-}
-
-/// Mount the given filesystem to the given mountpoint. This function spawns
-/// a background thread to handle filesystem operations while being mounted
-/// and therefore returns immediately. The returned handle should be stored
-/// to reference the mounted filesystem. If it's dropped, the filesystem will
-/// be unmounted.
-pub unsafe fn spawn_mount<'a, FS: Filesystem + Send + 'a, P: AsRef<Path>>(
-    filesystem: FS,
-    mountpoint: P,
-    options: MountOpt,
-) -> io::Result<BackgroundSession<'a>> {
-    Session::new(filesystem, mountpoint.as_ref(), options).and_then(|se| se.spawn())
 }
 
 ///

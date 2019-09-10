@@ -16,7 +16,7 @@ Some fuse features are missing but all the usable one on android are here.
 
 ### Additions
 
-- Mount using libc::mount instead of fusermount our `fuse_mount_compat` (libfuse has been deleted from required libraries)
+- Do not link the `libfuse`, mouting is made using libc::mount
 - `EventedSession` provide a session that wrap the fuse FD witouth taking the ownership of the Filesystem object, implement `Evented` to be used into a `mio::Pool`, for example you can do the android sdcardfs mounting layout with a single `fuse::Filesystem` instance
 - Implement `serde::Serialize` and `serde::Deserialize` for `fuse::FileAttr` and `fuse::FileType`
 

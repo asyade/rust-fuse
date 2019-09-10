@@ -17,7 +17,6 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
-use thread_scoped::{scoped, JoinGuard};
 
 /// The max size of write requests from the kernel. The absolute minimum is 4k,
 /// FUSE recommends at least 128k, max 16M. The FUSE default is 16M on macOS
@@ -85,67 +84,9 @@ impl<FS: Filesystem> Session<FS> {
     }
 }
 
-impl<'a, FS: Filesystem + Send + 'a> Session<FS> {
-    /// Run the session loop in a background thread
-    pub unsafe fn spawn(self) -> io::Result<BackgroundSession<'a>> {
-        BackgroundSession::new(self)
-    }
-}
-
 impl<FS: Filesystem> Drop for Session<FS> {
     fn drop(&mut self) {
         info!("Unmounted {}", self.mountpoint().display());
-    }
-}
-
-/// The background session data structure
-pub struct BackgroundSession<'a> {
-    /// Path of the mounted filesystem
-    pub mountpoint: PathBuf,
-    /// Thread guard of the background session
-    pub guard: JoinGuard<'a, io::Result<()>>,
-}
-
-impl<'a> BackgroundSession<'a> {
-    /// Create a new background session for the given session by running its
-    /// session loop in a background thread. If the returned handle is dropped,
-    /// the filesystem is unmounted and the given session ends.
-    pub unsafe fn new<FS: Filesystem + Send + 'a>(
-        se: Session<FS>,
-    ) -> io::Result<BackgroundSession<'a>> {
-        let mountpoint = se.mountpoint().to_path_buf();
-        let guard = scoped(move || {
-            let mut se = se;
-            se.run()
-        });
-        Ok(BackgroundSession {
-            mountpoint: mountpoint,
-            guard: guard,
-        })
-    }
-}
-
-impl<'a> Drop for BackgroundSession<'a> {
-    fn drop(&mut self) {
-        info!("Unmounting {}", self.mountpoint.display());
-        // Unmounting the filesystem will eventually end the session loop,
-        // drop the session and hence end the background thread.
-        match channel::unmount(&self.mountpoint) {
-            Ok(()) => (),
-            Err(err) => error!("Failed to unmount {}: {}", self.mountpoint.display(), err),
-        }
-    }
-}
-
-// replace with #[derive(Debug)] if Debug ever gets implemented for
-// thread_scoped::JoinGuard
-impl<'a> fmt::Debug for BackgroundSession<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(
-            f,
-            "BackgroundSession {{ mountpoint: {:?}, guard: JoinGuard<()> }}",
-            self.mountpoint
-        )
     }
 }
 

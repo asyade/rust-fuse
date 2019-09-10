@@ -11,6 +11,7 @@ readme = "README.md"
 keywords = ["fuse", "filesystem", "system", "bindings"]
 categories = ["api-bindings", "filesystem"]
 license = "MIT"
+build = "build.rs"
 
 [workspace]
 members = [".", "fuse-abi", "fuse-sys"]

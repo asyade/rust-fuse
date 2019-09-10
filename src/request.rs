@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::channel::ChannelSender;
 use crate::ll;
 use crate::reply::{Reply, ReplyDirectory, ReplyEmpty, ReplyRaw};
-use crate::session::{Session, MAX_WRITE_SIZE};
+use crate::session::MAX_WRITE_SIZE;
 use crate::Filesystem;
 
 /// We generally support async reads
@@ -41,7 +41,13 @@ pub struct Request<'a> {
     request: ll::Request<'a>,
 }
 
+///
+/// Something that can hanlde a fuse request
+///
 pub trait RequestDispatcher {
+    ///
+    /// Dispatch a fuse Reques on the filesystem and save proto/state into the session store
+    ///
     fn dispatch(&mut self, request: &mut Request<'_>, se: &mut super::session::FuseSessionStore);
 }
 

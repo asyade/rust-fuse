@@ -23,6 +23,7 @@ pub use reply::ReplyXattr;
 pub use reply::{Reply, ReplyAttr, ReplyData, ReplyEmpty, ReplyEntry, ReplyOpen};
 pub use reply::{ReplyBmap, ReplyCreate, ReplyDirectory, ReplyLock, ReplyStatfs, ReplyWrite};
 pub use request::Request;
+pub use request::RequestDispatcher;
 #[cfg(feature = "serde_support")]
 use serde_derive::{Deserialize, Serialize};
 pub use session::{EventedSession, Session};

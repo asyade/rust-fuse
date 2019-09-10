@@ -113,7 +113,7 @@ impl<FS: Filesystem> Drop for Session<FS> {
 pub struct EventedSession {
     /// Communication channel to the kernel driver
     ch: Channel,
-    store: FuseSessionStore,
+    pub store: FuseSessionStore,
 }
 
 impl Evented for EventedSession {

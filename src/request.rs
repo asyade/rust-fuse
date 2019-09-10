@@ -41,7 +41,7 @@ pub struct Request<'a> {
     request: ll::Request<'a>,
 }
 
-trait RequestDispatcher {
+pub trait RequestDispatcher {
     fn dispatch(&mut self, request: &mut Request<'_>, se: &mut super::session::FuseSessionStore);
 }
 
@@ -511,11 +511,6 @@ impl<'a> Request<'a> {
 
         Some(Self { ch, data, request })
     }
-
-    /// Dispatch request to the given filesystem.
-    /// This calls the appropriate filesystem operation method for the
-    /// request and sends back the returned reply to the kernel
-    pub fn dispatch(&self, se: &mut super::session::FuseSessionStore, fs: &mut Filesystem) {}
 
     /// Create a reply object for this request that can be passed to the filesystem
     /// implementation and makes sure that a request is replied exactly once

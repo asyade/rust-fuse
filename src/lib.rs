@@ -13,6 +13,7 @@ use std::io;
 use std::path::Path;
 use std::time::SystemTime;
 
+pub use channel::RecvResult;
 pub use fuse_abi::consts;
 pub use fuse_abi::FUSE_ROOT_ID;
 pub use ll::mount::MountOpt;

@@ -193,4 +193,8 @@ impl EventedSession {
         info!("Mounting {}", mountpoint.display());
         Channel::new(mountpoint, options).map(EventedSession)
     }
+
+    pub fn recv<'a>(&mut self, buffer: &'a mut Vec<u8>) -> RecvResult<'a> {
+        self.0.receive_request(buffer)
+    }
 }

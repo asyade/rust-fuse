@@ -10,6 +10,16 @@
 
 Rust-FUSE does not just provide bindings, it is a rewrite of the original FUSE C library to fully take advantage of Rust's architecture.
 
+## About this fork
+This fork is made for Android compatibility.
+Some fuse features are missing but all the usable one on android are here.
+
+### Additions
+
+- Mount using libc::mount instead of fusermount our fuse_mount_compat (libfuse are not required on linking)
+- `EventedSession` provide a session that wrap the fuse FD witouth taking the ownership of the Filesystem object, implement `Evented` to be used into a `mio::Pool`, for example you can archive the basic android mounting layout with a single instance of filesystem
+- Implement `serde::Serialize` and `serde::Deserialize` for `fuse::FileAttr` and `fuse::FileType`
+
 ## Documentation
 
 [Rust-FUSE reference][Documentation]

@@ -1,5 +1,6 @@
 use fuse::{
-    FileAttr, FileType, Filesystem, ReplyAttr, ReplyData, ReplyDirectory, ReplyEntry, Request,
+    FileAttr, FileType, Filesystem, MountOpt, RecvResult, ReplyAttr, ReplyData, ReplyDirectory,
+    ReplyEntry, Request,
 };
 use libc::ENOENT;
 use mio::{Events, Poll, PollOpt, Ready, Token};
@@ -107,24 +108,29 @@ impl Filesystem for HelloFS {
     }
 }
 
-fn main() {
+fn main() -> std::io::Result<()> {
     env_logger::init();
     let mountpoint = env::args_os().nth(1).unwrap();
-    let options = ["-o", "ro", "-o", "fsname=hello"]
-        .iter()
-        .map(|o| o.as_ref())
-        .collect::<Vec<&OsStr>>();
-    let mut session = fuse::evented(HelloFS, mountpoint, &options).unwrap();
+    let mut session = fuse::evented(mountpoint, MountOpt::Name("evented")).unwrap();
     let poll = Poll::new().unwrap();
-    let mut buf: Vec<u8> = Vec::with_capacity((16 * 1024 * 1024) + 4096);
+    let mut buffer: Vec<u8> = Vec::with_capacity((16 * 1024 * 1024) + 4096);
     let mut events = Events::with_capacity(1024);
     poll.register(&session, Token(1), Ready::readable(), PollOpt::level())
         .unwrap();
     loop {
         poll.poll(&mut events, None).unwrap();
         for e in events.iter().filter(|evt| !evt.readiness().is_empty()) {
-            dbg!(e);
-            session.try_handle(&mut buf).unwrap();
+            'read_until_eagin: loop {
+                match session.recv(&mut buffer) {
+                    RecvResult::Some(request) => {}
+                    RecvResult::Retry => break 'read_until_eagin,
+                    RecvResult::Drop(e) => {
+                        eprintln!("Fs must be deregistred: {:?}", e);
+                        poll.deregister(&session)?;
+                    }
+                }
+            }
         }
     }
+    Ok(())
 }

@@ -27,21 +27,60 @@ pub const MAX_WRITE_SIZE: usize = 16 * 1024 * 1024;
 /// up to MAX_WRITE_SIZE bytes in a write request, we use that value plus some extra space.
 const BUFFER_SIZE: usize = MAX_WRITE_SIZE + 4096;
 
+pub trait FuseSession {
+    /// (major, minor)
+    fn set_proto_major(&mut self, val: u32);
+    fn set_proto_minor(&mut self, val: u32);
+    fn proto_major(&self) -> u32;
+    fn proto_minor(&self) -> u32;
+    fn initialized(&self) -> bool;
+    fn set_initialized(&mut self, val: bool);
+    fn destroyed(&self) -> bool;
+    fn set_destroyed(&mut self, val: bool);
+}
+
 /// The session data structure
 #[derive(Debug)]
 pub struct Session<FS: Filesystem> {
+    filesystem: FS,
     /// Filesystem operation implementations
-    pub filesystem: FS,
-    /// Communication channel to the kernel driver
     ch: Channel,
     /// FUSE protocol major version
-    pub proto_major: u32,
+    proto_major: u32,
     /// FUSE protocol minor version
-    pub proto_minor: u32,
+    proto_minor: u32,
     /// True if the filesystem is initialized (init operation done)
-    pub initialized: bool,
+    initialized: bool,
     /// True if the filesystem was destroyed (destroy operation done)
-    pub destroyed: bool,
+    destroyed: bool,
+}
+
+impl<FS: Filesystem> FuseSession for Session<FS> {
+    fn set_proto_major(&mut self, val: u32) {
+        self.proto_major = val;
+    }
+    fn set_proto_minor(&mut self, val: u32) {
+        self.proto_minor = val;
+    }
+    fn proto_major(&self) -> u32 {
+        self.proto_major
+    }
+    fn proto_minor(&self) -> u32 {
+        self.proto_minor
+    }
+
+    fn initialized(&self) -> bool {
+        self.initialized
+    }
+    fn set_initialized(&mut self, val: bool) {
+        self.initialized = val;
+    }
+    fn destroyed(&self) -> bool {
+        self.destroyed
+    }
+    fn set_destroyed(&mut self, val: bool) {
+        self.destroyed = val
+    }
 }
 
 impl<FS: Filesystem> Session<FS> {
@@ -49,8 +88,8 @@ impl<FS: Filesystem> Session<FS> {
     pub fn new(filesystem: FS, mountpoint: &Path, options: MountOpt) -> io::Result<Session<FS>> {
         info!("Mounting {}", mountpoint.display());
         Channel::new(mountpoint, options).map(|ch| Session {
-            filesystem,
             ch,
+            filesystem,
             proto_major: 0,
             proto_minor: 0,
             initialized: false,
@@ -68,19 +107,20 @@ impl<FS: Filesystem> Session<FS> {
     /// having multiple buffers (which take up much memory), but the filesystem methods
     /// may run concurrent by spawning threads.
     pub fn run(&mut self) -> io::Result<()> {
+        unimplemented!()
         // Buffer for receiving requests from the kernel. Only one is allocated and
         // it is reused immediately after dispatching to conserve memory and allocations.
-        let mut buffer: Vec<u8> = Vec::with_capacity(BUFFER_SIZE);
-        loop {
-            // Read the next request from the given channel to kernel driver
-            // The kernel driver makes sure that we get exactly one request per read
-            match self.ch.receive_request(&mut buffer) {
-                RecvResult::Some(request) => request.dispatch(self),
-                RecvResult::Retry => continue,
-                RecvResult::Drop(None) => return Ok(()),
-                RecvResult::Drop(Some(err)) => return Err(err),
-            }
-        }
+        // let mut buffer: Vec<u8> = Vec::with_capacity(BUFFER_SIZE);
+        // loop {
+        // Read the next request from the given channel to kernel driver
+        // The kernel driver makes sure that we get exactly one request per read
+        // match self.ch.receive_request(&mut buffer) {
+        // RecvResult::Some(request) => request.dispatch(self, fs),
+        // RecvResult::Retry => continue,
+        // RecvResult::Drop(None) => return Ok(()),
+        // RecvResult::Drop(Some(err)) => return Err(err),
+        // }
+        // }
     }
 }
 
@@ -97,7 +137,18 @@ impl<FS: Filesystem> Drop for Session<FS> {
 ///
 // TODO: Drop
 #[derive(Debug)]
-pub struct EventedSession(Channel);
+pub struct EventedSession {
+    /// Communication channel to the kernel driver
+    ch: Channel,
+    /// FUSE protocol major version
+    pub proto_major: u32,
+    /// FUSE protocol minor version
+    pub proto_minor: u32,
+    /// True if the filesystem is initialized (init operation done)
+    pub initialized: bool,
+    /// True if the filesystem was destroyed (destroy operation done)
+    pub destroyed: bool,
+}
 
 impl Evented for EventedSession {
     fn register(
@@ -107,7 +158,7 @@ impl Evented for EventedSession {
         interest: Ready,
         opts: PollOpt,
     ) -> io::Result<()> {
-        let raw_fd = unsafe { self.0.raw_fd() };
+        let raw_fd = unsafe { self.ch.raw_fd() };
         EventedFd(&raw_fd).register(poll, token, interest, opts)
     }
     fn reregister(
@@ -117,12 +168,40 @@ impl Evented for EventedSession {
         interest: Ready,
         opts: PollOpt,
     ) -> io::Result<()> {
-        let raw_fd = unsafe { self.0.raw_fd() };
+        let raw_fd = unsafe { self.ch.raw_fd() };
         EventedFd(&raw_fd).reregister(poll, token, interest, opts)
     }
     fn deregister(&self, poll: &Poll) -> io::Result<()> {
-        let raw_fd = unsafe { self.0.raw_fd() };
+        let raw_fd = unsafe { self.ch.raw_fd() };
         EventedFd(&raw_fd).deregister(poll)
+    }
+}
+
+impl FuseSession for EventedSession {
+    fn set_proto_major(&mut self, val: u32) {
+        self.proto_major = val;
+    }
+    fn set_proto_minor(&mut self, val: u32) {
+        self.proto_minor = val;
+    }
+    fn proto_major(&self) -> u32 {
+        self.proto_major
+    }
+    fn proto_minor(&self) -> u32 {
+        self.proto_minor
+    }
+
+    fn initialized(&self) -> bool {
+        self.initialized
+    }
+    fn set_initialized(&mut self, val: bool) {
+        self.initialized = val;
+    }
+    fn destroyed(&self) -> bool {
+        self.destroyed
+    }
+    fn set_destroyed(&mut self, val: bool) {
+        self.destroyed = val
     }
 }
 
@@ -132,10 +211,16 @@ impl EventedSession {
     ///
     pub fn new(mountpoint: &Path, options: crate::ll::mount::MountOpt) -> io::Result<Self> {
         info!("Mounting {}", mountpoint.display());
-        Channel::new(mountpoint, options).map(EventedSession)
+        Channel::new(mountpoint, options).map(|ch| EventedSession {
+            ch,
+            proto_major: 0,
+            proto_minor: 0,
+            initialized: false,
+            destroyed: false,
+        })
     }
 
     pub fn recv<'a>(&mut self, buffer: &'a mut Vec<u8>) -> RecvResult<'a> {
-        self.0.receive_request(buffer)
+        self.ch.receive_request(buffer)
     }
 }

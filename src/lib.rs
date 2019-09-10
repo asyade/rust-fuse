@@ -25,6 +25,7 @@ pub use reply::{ReplyBmap, ReplyCreate, ReplyDirectory, ReplyLock, ReplyStatfs, 
 pub use request::Request;
 #[cfg(feature = "serde_support")]
 use serde_derive::{Deserialize, Serialize};
+pub use session::FuseSession;
 pub use session::{EventedSession, Session};
 
 mod channel;

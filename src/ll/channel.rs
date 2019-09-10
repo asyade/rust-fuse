@@ -1,6 +1,6 @@
-use std::io;
 use libc;
 use libc::c_int;
+use std::io;
 
 fn get_fd_flags(fd: c_int) -> c_int {
     unsafe { libc::fcntl(fd, libc::F_GETFL) }
@@ -16,7 +16,11 @@ pub fn set_nonblocking(fd: c_int, nonblocking: bool) -> io::Result<()> {
     match get_fd_flags(fd) {
         -1 => Err(io::Error::last_os_error()),
         previous => {
-            let new = if nonblocking { previous | libc::O_NONBLOCK } else { previous & !libc::O_NONBLOCK };
+            let new = if nonblocking {
+                previous | libc::O_NONBLOCK
+            } else {
+                previous & !libc::O_NONBLOCK
+            };
             if new != previous && set_fd_flags(fd, new) == -1 {
                 Err(io::Error::last_os_error())
             } else {

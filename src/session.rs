@@ -5,6 +5,10 @@
 //! filesystem is mounted, the session loop receives, dispatches and replies to kernel requests
 //! for filesystem operations under its mount point.
 
+use crate::channel::{self, Channel, RecvResult};
+use crate::ll::mount::MountOpt;
+use crate::request::Request;
+use crate::Filesystem;
 use libc::{EAGAIN, EINTR, ENODEV, ENOENT};
 use log::{error, info};
 use mio::unix::EventedFd;
@@ -14,10 +18,6 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 use thread_scoped::{scoped, JoinGuard};
-
-use crate::channel::{self, Channel, RecvResult};
-use crate::request::Request;
-use crate::Filesystem;
 
 /// The max size of write requests from the kernel. The absolute minimum is 4k,
 /// FUSE recommends at least 128k, max 16M. The FUSE default is 16M on macOS
@@ -47,11 +47,11 @@ pub struct Session<FS: Filesystem> {
 
 impl<FS: Filesystem> Session<FS> {
     /// Create a new session by mounting the given filesystem to the given mountpoint
-    pub fn new(filesystem: FS, mountpoint: &Path, options: &[&OsStr]) -> io::Result<Session<FS>> {
+    pub fn new(filesystem: FS, mountpoint: &Path, options: MountOpt) -> io::Result<Session<FS>> {
         info!("Mounting {}", mountpoint.display());
         Channel::new(mountpoint, options).map(|ch| Session {
-            filesystem: filesystem,
-            ch: ch,
+            filesystem,
+            ch,
             proto_major: 0,
             proto_minor: 0,
             initialized: false,
@@ -75,7 +75,7 @@ impl<FS: Filesystem> Session<FS> {
         loop {
             // Read the next request from the given channel to kernel driver
             // The kernel driver makes sure that we get exactly one request per read
-            match self.ch.receive(&mut buffer) {
+            match self.ch.receive_request(&mut buffer) {
                 RecvResult::Some(request) => request.dispatch(self),
                 RecvResult::Retry => continue,
                 RecvResult::Drop(None) => return Ok(()),
@@ -189,18 +189,7 @@ impl EventedSession {
     ///
     /// Read a request from the fuse fd and process it with the filesystem
     ///
-    pub fn try_handle(&mut self, buffer: &mut Vec<u8>) -> io::Result<()> {
-        match self.0.receive(buffer) {
-            RecvResult::Some(request) => {
-                request.dispatch(&mut self.0);
-                Ok(())
-            }
-            RecvResult::Drop(Some(err)) => Err(err),
-            _ => Ok(()),
-        }
-    }
-
-    pub fn new(mountpoint: &Path, options: &[&OsStr]) -> io::Result<Self> {
+    pub fn new(mountpoint: &Path, options: crate::ll::mount::MountOpt) -> io::Result<Self> {
         info!("Mounting {}", mountpoint.display());
         Channel::new(mountpoint, options).map(EventedSession)
     }

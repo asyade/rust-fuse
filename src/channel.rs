@@ -3,7 +3,8 @@
 //! Raw communication channel to the FUSE kernel driver.
 
 use super::ll::channel;
-use super::ll::fuse::fuse_mount_sys;
+use super::ll::mount;
+use crate::Request;
 use libc::{self, c_int, c_void, size_t};
 use log::error;
 use std::ffi::{CStr, CString, OsStr};
@@ -35,17 +36,13 @@ impl Channel {
     /// given path. The kernel driver will delegate filesystem operations of
     /// the given path to the channel. If the channel is dropped, the path is
     /// unmounted.
-    pub fn new(mountpoint: &Path, options: &[&OsStr]) -> io::Result<Channel> {
-        let mountpoint = mountpoint.canonicalize()?;
-        let mnt = CString::new(mountpoint.as_os_str().as_bytes())?;
-        let fd = fuse_mount_sys(mnt.as_ptr() as *const i8, libc::MS_NOSUID | libc::MS_NODEV);
+    pub fn new<T: AsRef<Path>>(mountpoint: T, options: mount::MountOpt) -> io::Result<Channel> {
+        let mountpoint = mountpoint.as_ref().canonicalize()?;
+        let fd = mount::fuse_mount(mountpoint.clone(), options)?;
         if fd < 0 {
             Err(io::Error::last_os_error())
         } else {
-            Ok(Channel {
-                mountpoint: mountpoint,
-                fd: fd,
-            })
+            Ok(Channel { mountpoint, fd })
         }
     }
 
@@ -54,9 +51,9 @@ impl Channel {
     /// this can be non blocking if `ll::channel::set_nonblocking` is set on the fuse channel
     ///
     #[inline]
-    pub fn receive<'a>(&mut self, buffer: &'a mut Vec<u8>) -> RecvResult<'a> {
-        match self.ch.receive(buffer) {
-            Ok(_) => match Request::new(self.ch.sender(), buffer) {
+    pub fn receive_request<'a>(&mut self, buffer: &'a mut Vec<u8>) -> RecvResult<'a> {
+        match self.receive_buffer(buffer) {
+            Ok(_) => match Request::new(self.sender(), buffer) {
                 // Return request
                 Some(request) => RecvResult::Some(request),
                 // Should drop on illegal request
@@ -64,9 +61,11 @@ impl Channel {
             },
             Err(err) => match err.raw_os_error() {
                 // The operation was interupted by the kernel, the user or fuse explicitly request a retry
-                Some(ENOENT) | Some(EINTR) | Some(EAGAIN) => RecvResult::Retry,
+                Some(e) if e & (libc::ENOENT | libc::EINTR | libc::EAGAIN) != 0 => {
+                    RecvResult::Retry
+                }
                 // Filesystem was unmounted without error
-                Some(ENODEV) => RecvResult::Drop(None),
+                Some(e) if e & libc::ENODEV != 0 => RecvResult::Drop(None),
                 // Return last os error
                 _ => RecvResult::Drop(Some(err)),
             },
@@ -79,7 +78,7 @@ impl Channel {
     }
 
     /// Receives data up to the capacity of the given buffer (can block).
-    pub fn receive(&self, buffer: &mut Vec<u8>) -> io::Result<()> {
+    pub fn receive_buffer(&self, buffer: &mut Vec<u8>) -> io::Result<()> {
         let rc = unsafe {
             libc::read(
                 self.fd,

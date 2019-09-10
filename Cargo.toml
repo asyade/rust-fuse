@@ -26,6 +26,7 @@ thread-scoped = "1.0.2"
 serde = {version = "1.0.99"}
 serde_derive = {version = "1.0.99"}
 mio = "0.6.19"
+capabilities = "0.3.0"
 
 [dev-dependencies]
 env_logger = "0.6.0"

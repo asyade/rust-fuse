@@ -15,6 +15,7 @@ This fork comme with a lot of change, in terme of features and structure
 
 ### Additions
 
+- `CANONICAL_PATH` https://chromium.googlesource.com/chromiumos/third_party/kernel/+/798b963ebef96ea76a51808950a7745cca4eefb7/include/uapi/linux/fuse.h#361
 - Do not link the `libfuse`, mouting is made using libc::mount
 - `EventedSession` provide a session that wrap the fuse FD witouth taking the ownership of the Filesystem object, implement `Evented` to be used into a `mio::Pool`, for example you can do the android sdcardfs mounting layout with a single `fuse::Filesystem` instance
 - Implement `serde::Serialize` and `serde::Deserialize` for `fuse::FileAttr` and `fuse::FileType`

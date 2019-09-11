@@ -86,6 +86,7 @@ impl Channel {
                 buffer.capacity() as size_t,
             )
         };
+        dbg!(rc);
         if rc < 0 {
             Err(io::Error::last_os_error())
         } else {

@@ -192,10 +192,12 @@ pub enum Operation<'a> {
         oldname: &'a OsStr,
         newname: &'a OsStr,
     },
+    #[cfg(target_os = "android")]
+    CanonicalPath,
     // TODO: CUSE_INIT since ABI 7.12
     // CuseInit {
     //     arg: &'a fuse_init_in,
-    // },
+    // }
 }
 
 impl<'a> fmt::Display for Operation<'a> {
@@ -244,6 +246,9 @@ impl<'a> fmt::Display for Operation<'a> {
             Operation::GetXTimes => write!(f, "GETXTIMES"),
             #[cfg(target_os = "macos")]
             Operation::Exchange { arg, oldname, newname } => write!(f, "EXCHANGE olddir {:#018x}, oldname {:?}, newdir {:#018x}, newname {:?}, options {:#x}", arg.olddir, oldname, arg.newdir, newname, arg.options),
+ 
+            #[cfg(target_os = "android")]
+            Operation::CanonicalPath => write!(f, "CANONICAL_PATH"),
         }
     }
 }
@@ -338,6 +343,11 @@ impl<'a> Operation<'a> {
                     oldname: data.fetch_str()?,
                     newname: data.fetch_str()?,
                 },
+
+                #[cfg(target_os = "android")]
+                fuse_opcode::FUSE_CANONICAL_PATH => Operation::CanonicalPath {
+                    
+                }
             })
         }
     }

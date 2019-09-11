@@ -11,8 +11,7 @@
 Rust-FUSE does not just provide bindings, it is a rewrite of the original FUSE C library to fully take advantage of Rust's architecture.
 
 ## About this fork
-This fork is made for Android compatibility.
-Some fuse features are missing but all the usable one on android are here.
+This fork comme with a lot of change, in terme of features and structure
 
 ### Additions
 

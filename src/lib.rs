@@ -232,7 +232,7 @@ pub trait Filesystem {
     /// filesystem may set, to change the way the file is opened. See fuse_file_info
     /// structure in <fuse_common.h> for more details.
     fn open(&mut self, _req: &Request<'_>, _ino: u64, _flags: u32, reply: ReplyOpen) {
-        reply.opened(0, 0);
+        reply.error(ENOSYS);
     }
 
     /// Read data.
@@ -312,7 +312,7 @@ pub trait Filesystem {
         _flush: bool,
         reply: ReplyEmpty,
     ) {
-        reply.ok();
+        reply.error(ENOSYS);
     }
 
     /// Synchronize file contents.
@@ -337,7 +337,7 @@ pub trait Filesystem {
     /// directory stream operations in case the contents of the directory can change
     /// between opendir and releasedir.
     fn opendir(&mut self, _req: &Request<'_>, _ino: u64, _flags: u32, reply: ReplyOpen) {
-        reply.opened(0, 0);
+        reply.error(ENOSYS);
     }
 
     /// Read directory.
@@ -368,7 +368,7 @@ pub trait Filesystem {
         _flags: u32,
         reply: ReplyEmpty,
     ) {
-        reply.ok();
+        reply.error(ENOSYS);
     }
 
     /// Synchronize directory contents.
@@ -388,7 +388,7 @@ pub trait Filesystem {
 
     /// Get file system statistics.
     fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyStatfs) {
-        reply.statfs(0, 0, 0, 0, 0, 512, 255, 0);
+        reply.error(ENOSYS);
     }
 
     /// Set an extended attribute.
@@ -542,6 +542,11 @@ pub trait Filesystem {
     /// during init to FUSE_XTIMES to enable
     #[cfg(target_os = "macos")]
     fn getxtimes(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyXTimes) {
+        reply.error(ENOSYS);
+    }
+
+    #[cfg(target_os = "android")]
+    fn canonical_path(&mut self, _req: &Request<'_>, reply: ReplyEmpty) {
         reply.error(ENOSYS);
     }
 }

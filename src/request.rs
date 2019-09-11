@@ -499,6 +499,9 @@ impl<T: Filesystem> RequestDispatcher for T {
                     request.reply(),
                 );
             }
+
+            #[cfg(target_os = "android")]
+            ll::Operation::CanonicalPath => self.canonical_path(request, request.reply()),
         }
     }
 }

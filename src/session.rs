@@ -6,8 +6,8 @@
 //! for filesystem operations under its mount point.
 
 use crate::channel::{self, Channel, RecvResult};
-use crate::ll::mount::MountOpt;
 use crate::request::Request;
+use crate::request::RequestDispatcher;
 use crate::Filesystem;
 use libc::{EAGAIN, EINTR, ENODEV, ENOENT};
 use log::{error, info};
@@ -52,7 +52,7 @@ impl FuseSessionStore {
 
 /// The session data structure
 #[derive(Debug)]
-pub struct Session<FS: Filesystem> {
+pub struct Session<FS: RequestDispatcher> {
     filesystem: FS,
     /// Filesystem operation implementations
     ch: Channel,
@@ -61,8 +61,7 @@ pub struct Session<FS: Filesystem> {
 
 impl<FS: Filesystem> Session<FS> {
     /// Create a new session by mounting the given filesystem to the given mountpoint
-    pub fn new(filesystem: FS, mountpoint: &Path, options: MountOpt) -> io::Result<Session<FS>> {
-        info!("Mounting {}", mountpoint.display());
+    pub fn new(filesystem: FS, mountpoint: &Path, options: &str) -> io::Result<Session<FS>> {
         Channel::new(mountpoint, options).map(|ch| Session {
             ch,
             filesystem,
@@ -80,26 +79,21 @@ impl<FS: Filesystem> Session<FS> {
     /// having multiple buffers (which take up much memory), but the filesystem methods
     /// may run concurrent by spawning threads.
     pub fn run(&mut self) -> io::Result<()> {
-        unimplemented!()
         // Buffer for receiving requests from the kernel. Only one is allocated and
         // it is reused immediately after dispatching to conserve memory and allocations.
-        // let mut buffer: Vec<u8> = Vec::with_capacity(BUFFER_SIZE);
-        // loop {
-        // Read the next request from the given channel to kernel driver
-        // The kernel driver makes sure that we get exactly one request per read
-        // match self.ch.receive_request(&mut buffer) {
-        // RecvResult::Some(request) => request.dispatch(self, fs),
-        // RecvResult::Retry => continue,
-        // RecvResult::Drop(None) => return Ok(()),
-        // RecvResult::Drop(Some(err)) => return Err(err),
-        // }
-        // }
-    }
-}
-
-impl<FS: Filesystem> Drop for Session<FS> {
-    fn drop(&mut self) {
-        info!("Unmounted {}", self.mountpoint().display());
+        let mut buffer: Vec<u8> = Vec::with_capacity(BUFFER_SIZE);
+        loop {
+            // Read the next request from the given channel to kernel driver
+            // The kernel driver makes sure that we get exactly one request per read
+            match self.ch.receive_request(&mut buffer) {
+                RecvResult::Some(mut request) => {
+                    self.filesystem.dispatch(&mut request, &mut self.store)
+                }
+                RecvResult::Retry => continue,
+                RecvResult::Drop(None) => return Ok(()),
+                RecvResult::Drop(Some(err)) => return Err(err),
+            }
+        }
     }
 }
 
@@ -147,8 +141,7 @@ impl EventedSession {
     ///
     /// Read a request from the fuse fd and process it with the filesystem
     ///
-    pub fn new(mountpoint: &Path, options: crate::ll::mount::MountOpt) -> io::Result<Self> {
-        info!("Mounting {}", mountpoint.display());
+    pub fn new(mountpoint: &Path, options: &str) -> io::Result<Self> {
         Channel::new(mountpoint, options).map(|ch| EventedSession {
             ch,
             store: FuseSessionStore::new(),

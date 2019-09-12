@@ -16,7 +16,6 @@ use std::time::SystemTime;
 pub use channel::RecvResult;
 pub use fuse_abi::consts;
 pub use fuse_abi::FUSE_ROOT_ID;
-pub use ll::mount::MountOpt;
 #[cfg(target_os = "macos")]
 pub use reply::ReplyXTimes;
 pub use reply::ReplyXattr;
@@ -546,7 +545,7 @@ pub trait Filesystem {
     }
 
     #[cfg(target_os = "android")]
-    fn canonical_path(&mut self, _req: &Request<'_>, reply: ReplyEmpty) {
+    fn canonical_path(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyData) {
         reply.error(ENOSYS);
     }
 }
@@ -559,7 +558,7 @@ pub trait Filesystem {
 pub fn mount<FS: Filesystem, P: AsRef<Path>>(
     filesystem: FS,
     mountpoint: P,
-    options: MountOpt,
+    options: &str,
 ) -> io::Result<()> {
     Session::new(filesystem, mountpoint.as_ref(), options).and_then(|mut se| se.run())
 }
@@ -568,6 +567,6 @@ pub fn mount<FS: Filesystem, P: AsRef<Path>>(
 /// Mount the given filesystem to the given mountpoint. this function
 /// set the fuse fd as non blocking and implement `mio::Evented`
 ///
-pub fn evented<P: AsRef<Path>>(mountpoint: P, options: MountOpt) -> io::Result<EventedSession> {
+pub fn evented<P: AsRef<Path>>(mountpoint: P, options: &str) -> io::Result<EventedSession> {
     EventedSession::new(mountpoint.as_ref(), options)
 }

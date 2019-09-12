@@ -346,7 +346,6 @@ impl<'a> Operation<'a> {
 
                 #[cfg(target_os = "android")]
                 fuse_opcode::FUSE_CANONICAL_PATH => Operation::CanonicalPath {
-                    
                 }
             })
         }

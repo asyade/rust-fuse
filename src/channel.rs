@@ -36,7 +36,12 @@ impl Channel {
     /// given path. The kernel driver will delegate filesystem operations of
     /// the given path to the channel. If the channel is dropped, the path is
     /// unmounted.
-    pub fn new<T: AsRef<Path>>(mountpoint: T, options: mount::MountOpt) -> io::Result<Channel> {
+    pub fn new<T: AsRef<Path>>(mountpoint: T, options: &str) -> io::Result<Channel> {
+        log::info!(
+            "Mounting {} with {}",
+            mountpoint.as_ref().display(),
+            options
+        );
         let mountpoint: PathBuf = PathBuf::from(mountpoint.as_ref());
         let fd = mount::mount(mountpoint.clone(), options)?;
         if fd < 0 {
@@ -86,7 +91,6 @@ impl Channel {
                 buffer.capacity() as size_t,
             )
         };
-        dbg!(rc);
         if rc < 0 {
             Err(io::Error::last_os_error())
         } else {

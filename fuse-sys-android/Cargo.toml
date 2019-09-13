@@ -1,0 +1,14 @@
+[package]
+name = "fuse-sys-android"
+edition = "2018"
+version = "0.0.1-dev"
+authors = ["Asya corbeai <asya.corbeau@get-moore.com>"]
+description = "Emulate FFI bindings to the FUSE kernel interface and libfuse for Android"
+keywords = ["fuse", "filesystem", "system", "bindings", "android", "arm"]
+categories = ["external-ffi-bindings", "filesystem", "os::unix-apis"]
+license = "MIT"
+
+[build-dependencies]
+libc = "0.1.12"
+
+[dependencies]

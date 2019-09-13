@@ -2,15 +2,14 @@
 //!
 //! Raw communication channel to the FUSE kernel driver.
 
-use super::ll::channel;
-use super::ll::mount;
-use crate::Request;
+use fuse_sys::fuse_args;
 use libc::{self, c_int, c_void, size_t};
 use log::error;
 use std::ffi::{CStr, CString, OsStr};
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::os::unix::io::IntoRawFd;
 
 use crate::reply::ReplySender;
 
@@ -19,16 +18,20 @@ use crate::reply::ReplySender;
 pub struct Channel {
     mountpoint: PathBuf,
     fd: c_int,
+    skip_uninit: bool,
 }
 
-#[derive(Debug)]
-pub enum RecvResult<'a> {
-    // A request has been readed
-    Some(Request<'a>),
-    // No request available but safe to retry
-    Retry,
-    // Filesystem has been unmounted or there is an error, next call to receive should return an error
-    Drop(Option<io::Error>),
+/// Helper function to provide options as a fuse_args struct
+/// (which contains an argc count and an argv pointer)
+fn with_fuse_args<T, F: FnOnce(&fuse_args) -> T>(options: &[&OsStr], f: F) -> T {
+    let mut args = vec![CString::new("rust-fuse").unwrap()];
+    args.extend(options.iter().map(|s| CString::new(s.as_bytes()).unwrap()));
+    let argptrs: Vec<_> = args.iter().map(|s| s.as_ptr()).collect();
+    f(&fuse_args {
+        argc: argptrs.len() as i32,
+        argv: argptrs.as_ptr(),
+        allocated: 0,
+    })
 }
 
 impl Channel {
@@ -36,44 +39,35 @@ impl Channel {
     /// given path. The kernel driver will delegate filesystem operations of
     /// the given path to the channel. If the channel is dropped, the path is
     /// unmounted.
-    pub fn new<T: AsRef<Path>>(mountpoint: T, options: &str) -> io::Result<Channel> {
-        log::info!(
-            "Mounting {} with {}",
-            mountpoint.as_ref().display(),
-            options
-        );
-        let mountpoint: PathBuf = PathBuf::from(mountpoint.as_ref());
-        let fd = mount::mount(mountpoint.clone(), options)?;
+    #[cfg(not(target_os = "android"))]
+    pub fn new(mountpoint: &Path, options: &[&OsStr]) -> io::Result<Channel> {
+        use fuse_sys::fuse_mount_compat25;
+
+        let mountpoint = mountpoint.canonicalize()?;
+        with_fuse_args(options, |args| {
+            let mnt = CString::new(mountpoint.as_os_str().as_bytes())?;
+            let fd = unsafe { fuse_mount_compat25(mnt.as_ptr(), args) };
+            if fd < 0 {
+                Err(io::Error::last_os_error())
+            } else {
+                Ok(Channel { skip_uninit: false, mountpoint, fd })
+            }
+        })
+    }
+
+    /// Same as the non-android version but use libc::mount instead of libfuse or fuser
+    /// That means two thingss,  options are not lib fuse options but `libc::mount` options
+    /// and root privileges are needed
+    #[cfg(target_os = "android")]
+    pub fn new(mountpoint: &Path, options: &[&OsStr]) -> io::Result<Channel> {
+        use fuse_sys_android::fuse_mount_android_compat;
+        let mountpoint = mountpoint.canonicalize()?;
+        let mnt = CString::new(mountpoint.as_os_str().as_bytes())?;
+        let fd = unsafe { fuse_mount_android_compat(mnt, options) };
         if fd < 0 {
             Err(io::Error::last_os_error())
         } else {
             Ok(Channel { mountpoint, fd })
-        }
-    }
-
-    ///
-    /// Read a single request from the fuse channel
-    /// this can be non blocking if `ll::channel::set_nonblocking` is set on the fuse channel
-    ///
-    #[inline]
-    pub fn receive_request<'a>(&mut self, buffer: &'a mut Vec<u8>) -> RecvResult<'a> {
-        match self.receive_buffer(buffer) {
-            Ok(_) => match Request::new(self.sender(), buffer) {
-                // Return request
-                Some(request) => RecvResult::Some(request),
-                // Should drop on illegal request
-                None => RecvResult::Drop(None),
-            },
-            Err(err) => match err.raw_os_error() {
-                // The operation was interupted by the kernel, the user or fuse explicitly request a retry
-                Some(e) if e & (libc::ENOENT | libc::EINTR | libc::EAGAIN) != 0 => {
-                    RecvResult::Retry
-                }
-                // Filesystem was unmounted without error
-                Some(e) if e & libc::ENODEV != 0 => RecvResult::Drop(None),
-                // Return last os error
-                _ => RecvResult::Drop(Some(err)),
-            },
         }
     }
 
@@ -83,7 +77,7 @@ impl Channel {
     }
 
     /// Receives data up to the capacity of the given buffer (can block).
-    fn receive_buffer(&self, buffer: &mut Vec<u8>) -> io::Result<()> {
+    pub fn receive(&self, buffer: &mut Vec<u8>) -> io::Result<()> {
         let rc = unsafe {
             libc::read(
                 self.fd,
@@ -111,24 +105,21 @@ impl Channel {
         // dropping the channel, it'll return an EBADF error.
         ChannelSender { fd: self.fd }
     }
+}
 
-    ///
-    /// Return the raw fuse socket fd
-    ///
-    pub unsafe fn raw_fd(&self) -> &c_int {
-        &self.fd
-    }
-
-    ///
-    /// Set the fuse fd as evented fd
-    ///
-    pub fn evented(&mut self) -> io::Result<()> {
-        channel::set_nonblocking(self.fd, true)
+impl IntoRawFd for Channel {
+    fn into_raw_fd(mut self) -> i32 {
+        // Avoid channel to be unmounted at drop
+        self.skip_uninit = true;
+        self.fd
     }
 }
 
 impl Drop for Channel {
     fn drop(&mut self) {
+        if self.skip_uninit {
+            return;
+        }
         // TODO: send ioctl FUSEDEVIOCSETDAEMONDEAD on macOS before closing the fd
         // Close the communication channel to the kernel driver
         // (closing it before unnmount prevents sync unmount deadlock)
@@ -136,7 +127,7 @@ impl Drop for Channel {
             libc::close(self.fd);
         }
         // Unmount this channel's mount point
-        let _ = mount::unmount(&self.mountpoint);
+        let _ = unmount(&self.mountpoint);
     }
 }
 
@@ -169,5 +160,87 @@ impl ReplySender for ChannelSender {
         if let Err(err) = ChannelSender::send(self, data) {
             error!("Failed to send FUSE reply: {}", err);
         }
+    }
+}
+
+/// Unmount an arbitrary mount point
+pub fn unmount(mountpoint: &Path) -> io::Result<()> {
+    // fuse_unmount_compat22 unfortunately doesn't return a status. Additionally,
+    // it attempts to call realpath, which in turn calls into the filesystem. So
+    // if the filesystem returns an error, the unmount does not take place, with
+    // no indication of the error available to the caller. So we call unmount
+    // directly, which is what osxfuse does anyway, since we already converted
+    // to the real path when we first mounted.
+
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "bitrig",
+        target_os = "netbsd"
+    ))]
+    #[inline]
+    fn libc_umount(mnt: &CStr) -> c_int {
+        unsafe { libc::unmount(mnt.as_ptr(), 0) }
+    }
+
+    #[cfg(not(any(
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "bitrig",
+        target_os = "netbsd"
+    )))]
+    #[inline]
+    fn libc_umount(mnt: &CStr) -> c_int {
+        use fuse_sys::fuse_unmount_compat22;
+        use std::io::ErrorKind::PermissionDenied;
+
+        let rc = unsafe { libc::umount(mnt.as_ptr()) };
+        if rc < 0 && io::Error::last_os_error().kind() == PermissionDenied {
+            // Linux always returns EPERM for non-root users.  We have to let the
+            // library go through the setuid-root "fusermount -u" to unmount.
+            unsafe {
+                fuse_unmount_compat22(mnt.as_ptr());
+            }
+            0
+        } else {
+            rc
+        }
+    }
+
+    let mnt = CString::new(mountpoint.as_os_str().as_bytes())?;
+    let rc = libc_umount(&mnt);
+    if rc < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::with_fuse_args;
+    use std::ffi::{CStr, OsStr};
+
+    #[test]
+    fn fuse_args() {
+        with_fuse_args(&[OsStr::new("foo"), OsStr::new("bar")], |args| {
+            assert_eq!(args.argc, 3);
+            assert_eq!(
+                unsafe { CStr::from_ptr(*args.argv.offset(0)).to_bytes() },
+                b"rust-fuse"
+            );
+            assert_eq!(
+                unsafe { CStr::from_ptr(*args.argv.offset(1)).to_bytes() },
+                b"foo"
+            );
+            assert_eq!(
+                unsafe { CStr::from_ptr(*args.argv.offset(2)).to_bytes() },
+                b"bar"
+            );
+        });
     }
 }

@@ -289,11 +289,11 @@ pub enum fuse_opcode {
     #[cfg(target_os = "macos")]
     FUSE_EXCHANGE = 63,
 
-    #[cfg(target_os = "android")]
-    FUSE_CANONICAL_PATH = 2016,
-
     #[cfg(feature = "abi-7-12")]
     CUSE_INIT = 4096,
+
+    #[cfg(target_os = "android")]
+    FUSE_CANONICAL_PATH = 2006,
 }
 
 impl TryFrom<u32> for fuse_opcode {
@@ -355,11 +355,11 @@ impl TryFrom<u32> for fuse_opcode {
             #[cfg(target_os = "macos")]
             63 => Ok(fuse_opcode::FUSE_EXCHANGE),
 
-            #[cfg(target_os = "android")]
-            2016 => Ok(fuse_opcode::FUSE_CANONICAL_PATH),
-
             #[cfg(feature = "abi-7-12")]
             4096 => Ok(fuse_opcode::CUSE_INIT),
+
+            #[cfg(target_os = "android")]
+            2006 => Ok(fuse_opcode::FUSE_CANONICAL_PATH),
 
             _ => Err(InvalidOpcodeError),
         }
@@ -840,16 +840,6 @@ pub struct fuse_fallocate_in {
     length: u64,
     mode: u32,
     padding: u32,
-}
-
-#[cfg(feature = "android")]
-#[repr(C)]
-#[derive(Debug)]
-pub struct fuse_canonical_path_in {
-    pub ino: u64,
-    pub off: u64,
-    pub namelen: u32,
-    pub typ: u32,
 }
 
 #[repr(C)]

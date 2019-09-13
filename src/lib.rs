@@ -5,15 +5,13 @@
 //! and unmount calls which are needed to establish a fd to talk to the kernel driver.
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
-#![feature(stmt_expr_attributes, rustc_private)]
 use libc::{c_int, ENOSYS};
 use std::convert::AsRef;
 use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
 use std::time::SystemTime;
-
-pub use channel::RecvResult;
+use std::os::unix::io::IntoRawFd;
 pub use fuse_abi::consts;
 pub use fuse_abi::FUSE_ROOT_ID;
 #[cfg(target_os = "macos")]
@@ -22,10 +20,8 @@ pub use reply::ReplyXattr;
 pub use reply::{Reply, ReplyAttr, ReplyData, ReplyEmpty, ReplyEntry, ReplyOpen};
 pub use reply::{ReplyBmap, ReplyCreate, ReplyDirectory, ReplyLock, ReplyStatfs, ReplyWrite};
 pub use request::Request;
-pub use request::RequestDispatcher;
-#[cfg(feature = "serde_support")]
-use serde_derive::{Deserialize, Serialize};
-pub use session::{EventedSession, Session};
+pub use session::{BackgroundSession, Session};
+use channel::Channel;
 
 mod channel;
 mod ll;
@@ -34,7 +30,6 @@ mod request;
 mod session;
 
 /// File types
-#[cfg_attr(feature = "serde_support", derive(Serialize, Deserialize))]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum FileType {
     /// Named pipe (S_IFIFO)
@@ -54,7 +49,6 @@ pub enum FileType {
 }
 
 /// File attributes
-#[cfg_attr(feature = "serde_support", derive(Serialize, Deserialize))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileAttr {
     /// Inode number
@@ -231,7 +225,7 @@ pub trait Filesystem {
     /// filesystem may set, to change the way the file is opened. See fuse_file_info
     /// structure in <fuse_common.h> for more details.
     fn open(&mut self, _req: &Request<'_>, _ino: u64, _flags: u32, reply: ReplyOpen) {
-        reply.error(ENOSYS);
+        reply.opened(0, 0);
     }
 
     /// Read data.
@@ -311,7 +305,7 @@ pub trait Filesystem {
         _flush: bool,
         reply: ReplyEmpty,
     ) {
-        reply.error(ENOSYS);
+        reply.ok();
     }
 
     /// Synchronize file contents.
@@ -336,7 +330,7 @@ pub trait Filesystem {
     /// directory stream operations in case the contents of the directory can change
     /// between opendir and releasedir.
     fn opendir(&mut self, _req: &Request<'_>, _ino: u64, _flags: u32, reply: ReplyOpen) {
-        reply.error(ENOSYS);
+        reply.opened(0, 0);
     }
 
     /// Read directory.
@@ -367,7 +361,7 @@ pub trait Filesystem {
         _flags: u32,
         reply: ReplyEmpty,
     ) {
-        reply.error(ENOSYS);
+        reply.ok();
     }
 
     /// Synchronize directory contents.
@@ -387,7 +381,7 @@ pub trait Filesystem {
 
     /// Get file system statistics.
     fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyStatfs) {
-        reply.error(ENOSYS);
+        reply.statfs(0, 0, 0, 0, 0, 512, 255, 0);
     }
 
     /// Set an extended attribute.
@@ -544,8 +538,14 @@ pub trait Filesystem {
         reply.error(ENOSYS);
     }
 
+    /// Allows FUSE to report to inotify that it is acting
+    /// as a layered filesystem. The userspace component
+    /// returns a string representing the location of the
+    /// underlying file. If the string cannot be resolved
+    /// into a path, the top level path is returned instead.
+    /// see : https://git.expressweb.fr/bachou/android_kernel_samsung_universal9810/commit/fac99a7b0010cafb5ba0df8e646695c3ae651678
     #[cfg(target_os = "android")]
-    fn canonical_path(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyData) {
+    fn canonicalpath(&mut self, ino: u64, reply: ReplyData) {
         reply.error(ENOSYS);
     }
 }
@@ -558,15 +558,29 @@ pub trait Filesystem {
 pub fn mount<FS: Filesystem, P: AsRef<Path>>(
     filesystem: FS,
     mountpoint: P,
-    options: &str,
+    options: &[&OsStr],
 ) -> io::Result<()> {
     Session::new(filesystem, mountpoint.as_ref(), options).and_then(|mut se| se.run())
 }
 
-///
-/// Mount the given filesystem to the given mountpoint. this function
-/// set the fuse fd as non blocking and implement `mio::Evented`
-///
-pub fn evented<P: AsRef<Path>>(mountpoint: P, options: &str) -> io::Result<EventedSession> {
-    EventedSession::new(mountpoint.as_ref(), options)
+/// Mount the given filesystem to the given mountpoint. This function will
+/// This function will return the raw fuse descriptor to be handled at your
+pub unsafe fn raw_mount<FS: Filesystem, P: AsRef<Path>>(
+    mountpoint: P,
+    options: &[&OsStr],
+) -> io::Result<c_int> {
+    Channel::new(mountpoint.as_ref(), options).map(|ch| { ch.into_raw_fd() })
+}
+
+/// Mount the given filesystem to the given mountpoint. This function spawns
+/// a background thread to handle filesystem operations while being mounted
+/// and therefore returns immediately. The returned handle should be stored
+/// to reference the mounted filesystem. If it's dropped, the filesystem will
+/// be unmounted.
+pub unsafe fn spawn_mount<'a, FS: Filesystem + Send + 'a, P: AsRef<Path>>(
+    filesystem: FS,
+    mountpoint: P,
+    options: &[&OsStr],
+) -> io::Result<BackgroundSession<'a>> {
+    Session::new(filesystem, mountpoint.as_ref(), options).and_then(|se| se.spawn())
 }

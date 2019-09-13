@@ -5,17 +5,17 @@
 //!
 //! TODO: This module is meant to go away soon in favor of `ll::Request`.
 
-use fuse_abi::consts::*;
-use fuse_abi::*;
-use libc::{EIO, ENOSYS, EPROTO};
-use log::{debug, error, warn};
 use std::convert::TryFrom;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use libc::{EIO, ENOSYS, EPROTO};
+use fuse_abi::*;
+use fuse_abi::consts::*;
+use log::{debug, error, warn};
 
 use crate::channel::ChannelSender;
 use crate::ll;
-use crate::reply::{Reply, ReplyDirectory, ReplyEmpty, ReplyRaw};
+use crate::reply::{Reply, ReplyRaw, ReplyEmpty, ReplyDirectory};
 use crate::session::MAX_WRITE_SIZE;
 use crate::Filesystem;
 
@@ -41,8 +41,9 @@ pub struct Request<'a> {
     request: ll::Request<'a>,
 }
 
+
 ///
-/// Something that can hanlde a fuse request
+/// Something that can hanlde a fuse request, 
 ///
 pub trait RequestDispatcher {
     ///
@@ -50,6 +51,7 @@ pub trait RequestDispatcher {
     ///
     fn dispatch(&mut self, request: &mut Request<'_>, se: &mut super::session::FuseSessionStore);
 }
+
 
 impl<T: Filesystem> RequestDispatcher for T {
     fn dispatch(&mut self, request: &mut Request<'_>, se: &mut super::session::FuseSessionStore) {
@@ -502,7 +504,7 @@ impl<T: Filesystem> RequestDispatcher for T {
 
             #[cfg(target_os = "android")]
             ll::Operation::CanonicalPath => {
-                self.canonical_path(request, request.request.nodeid(), request.reply())
+                self.canonicalpath(request.request.nodeid(), request.reply())
             }
         }
     }
@@ -520,7 +522,7 @@ impl<'a> Request<'a> {
             }
         };
 
-        Some(Self { ch, data, request })
+        Some(Self { ch, data, request})
     }
 
     /// Create a reply object for this request that can be passed to the filesystem

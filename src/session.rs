@@ -5,18 +5,17 @@
 //! filesystem is mounted, the session loop receives, dispatches and replies to kernel requests
 //! for filesystem operations under its mount point.
 
-use crate::channel::{self, Channel, RecvResult};
-use crate::request::Request;
-use crate::request::RequestDispatcher;
-use crate::Filesystem;
-use libc::{EAGAIN, EINTR, ENODEV, ENOENT};
-use log::{error, info};
-use mio::unix::EventedFd;
-use mio::{Evented, Poll, PollOpt, Ready, Token};
+use std::io;
 use std::ffi::OsStr;
 use std::fmt;
-use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf, Path};
+use thread_scoped::{scoped, JoinGuard};
+use libc::{EAGAIN, EINTR, ENODEV, ENOENT};
+use log::{error, info};
+
+use crate::channel::{self, Channel};
+use crate::request::{Request, RequestDispatcher};
+use crate::Filesystem;
 
 /// The max size of write requests from the kernel. The absolute minimum is 4k,
 /// FUSE recommends at least 128k, max 16M. The FUSE default is 16M on macOS
@@ -39,16 +38,6 @@ pub struct FuseSessionStore {
     pub destroyed: bool,
 }
 
-impl FuseSessionStore {
-    fn new() -> Self {
-        Self {
-            proto_major: 0,
-            proto_minor: 0,
-            initialized: false,
-            destroyed: false,
-        }
-    }
-}
 
 /// The session data structure
 #[derive(Debug)]
@@ -61,11 +50,19 @@ pub struct Session<FS: RequestDispatcher> {
 
 impl<FS: Filesystem> Session<FS> {
     /// Create a new session by mounting the given filesystem to the given mountpoint
-    pub fn new(filesystem: FS, mountpoint: &Path, options: &str) -> io::Result<Session<FS>> {
-        Channel::new(mountpoint, options).map(|ch| Session {
-            ch,
-            filesystem,
-            store: FuseSessionStore::new(),
+    pub fn new(filesystem: FS, mountpoint: &Path, options: &[&OsStr]) -> io::Result<Session<FS>> {
+        info!("Mounting {}", mountpoint.display());
+        Channel::new(mountpoint, options).map(|ch| {
+            Session {
+                filesystem: filesystem,
+                ch: ch,
+                store: FuseSessionStore {
+                    proto_major: 0,
+                    proto_minor: 0,
+                    initialized: false,
+                    destroyed: false,
+                }
+            }
         })
     }
 
@@ -85,70 +82,76 @@ impl<FS: Filesystem> Session<FS> {
         loop {
             // Read the next request from the given channel to kernel driver
             // The kernel driver makes sure that we get exactly one request per read
-            match self.ch.receive_request(&mut buffer) {
-                RecvResult::Some(mut request) => {
-                    self.filesystem.dispatch(&mut request, &mut self.store)
+            match self.ch.receive(&mut buffer) {
+                Ok(()) => match Request::new(self.ch.sender(), &buffer) {
+                    // Dispatch request
+                    Some(mut req) => self.filesystem.dispatch(&mut req, &mut self.store),
+                    // Quit loop on illegal request
+                    None => break,
+                },
+                Err(err) => match err.raw_os_error() {
+                    // Operation interrupted. Accordingly to FUSE, this is safe to retry
+                    Some(ENOENT) => continue,
+                    // Interrupted system call, retry
+                    Some(EINTR) => continue,
+                    // Explicitly try again
+                    Some(EAGAIN) => continue,
+                    // Filesystem was unmounted, quit the loop
+                    Some(ENODEV) => break,
+                    // Unhandled error
+                    _ => return Err(err),
                 }
-                RecvResult::Retry => continue,
-                RecvResult::Drop(None) => return Ok(()),
-                RecvResult::Drop(Some(err)) => return Err(err),
             }
+        }
+        Ok(())
+    }
+}
+
+impl<'a, FS: Filesystem + Send + 'a> Session<FS> {
+    /// Run the session loop in a background thread
+    pub unsafe fn spawn(self) -> io::Result<BackgroundSession<'a>> {
+        BackgroundSession::new(self)
+    }
+}
+
+/// The background session data structure
+pub struct BackgroundSession<'a> {
+    /// Path of the mounted filesystem
+    pub mountpoint: PathBuf,
+    /// Thread guard of the background session
+    pub guard: JoinGuard<'a, io::Result<()>>,
+}
+
+impl<'a> BackgroundSession<'a> {
+    /// Create a new background session for the given session by running its
+    /// session loop in a background thread. If the returned handle is dropped,
+    /// the filesystem is unmounted and the given session ends.
+    pub unsafe fn new<FS: Filesystem + Send + 'a>(se: Session<FS>) -> io::Result<BackgroundSession<'a>> {
+        let mountpoint = se.mountpoint().to_path_buf();
+        let guard = scoped(move || {
+            let mut se = se;
+            se.run()
+        });
+        Ok(BackgroundSession { mountpoint, guard })
+    }
+}
+
+impl<'a> Drop for BackgroundSession<'a> {
+    fn drop(&mut self) {
+        info!("Unmounting {}", self.mountpoint.display());
+        // Unmounting the filesystem will eventually end the session loop,
+        // drop the session and hence end the background thread.
+        match channel::unmount(&self.mountpoint) {
+            Ok(()) => (),
+            Err(err) => error!("Failed to unmount {}: {}", self.mountpoint.display(), err),
         }
     }
 }
 
-///
-/// A FuseEvented provides a way to use the FUSE filesystem in a custom event
-/// loop. It implements the mio Evented trait, so it can be polled for
-/// readiness.
-///
-// TODO: Drop
-#[derive(Debug)]
-pub struct EventedSession {
-    /// Communication channel to the kernel driver
-    ch: Channel,
-    pub store: FuseSessionStore,
-}
-
-impl Evented for EventedSession {
-    fn register(
-        &self,
-        poll: &Poll,
-        token: Token,
-        interest: Ready,
-        opts: PollOpt,
-    ) -> io::Result<()> {
-        let raw_fd = unsafe { self.ch.raw_fd() };
-        EventedFd(&raw_fd).register(poll, token, interest, opts)
-    }
-    fn reregister(
-        &self,
-        poll: &Poll,
-        token: Token,
-        interest: Ready,
-        opts: PollOpt,
-    ) -> io::Result<()> {
-        let raw_fd = unsafe { self.ch.raw_fd() };
-        EventedFd(&raw_fd).reregister(poll, token, interest, opts)
-    }
-    fn deregister(&self, poll: &Poll) -> io::Result<()> {
-        let raw_fd = unsafe { self.ch.raw_fd() };
-        EventedFd(&raw_fd).deregister(poll)
-    }
-}
-
-impl EventedSession {
-    ///
-    /// Read a request from the fuse fd and process it with the filesystem
-    ///
-    pub fn new(mountpoint: &Path, options: &str) -> io::Result<Self> {
-        Channel::new(mountpoint, options).map(|ch| EventedSession {
-            ch,
-            store: FuseSessionStore::new(),
-        })
-    }
-
-    pub fn recv<'a>(&mut self, buffer: &'a mut Vec<u8>) -> RecvResult<'a> {
-        self.ch.receive_request(buffer)
+// replace with #[derive(Debug)] if Debug ever gets implemented for
+// thread_scoped::JoinGuard
+impl<'a> fmt::Debug for BackgroundSession<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        write!(f, "BackgroundSession {{ mountpoint: {:?}, guard: JoinGuard<()> }}", self.mountpoint)
     }
 }

@@ -10,6 +10,15 @@
 
 Rust-FUSE does not just provide bindings, it is a rewrite of the original FUSE C library to fully take advantage of Rust's architecture.
 
+**This fork**
+- Android 7+
+    - Allow compilation without linking libfuse
+    - Mount using libc::mount (require root)
+    - CANONICAL_PATH operation (fron android 7+/ChromeOs)
+- Code refactoring
+    - Add `mount_raw` to obtains raw fuse_fd
+    - Add auto trait implemented on every `Filesystem` implementor, the trait allow handling request without `Session`
+
 ## Documentation
 
 [Rust-FUSE reference][Documentation]

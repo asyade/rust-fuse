@@ -67,7 +67,7 @@ impl Channel {
         if fd < 0 {
             Err(io::Error::last_os_error())
         } else {
-            Ok(Channel { mountpoint, fd })
+            Ok(Channel { skip_uninit: false, mountpoint, fd })
         }
     }
 

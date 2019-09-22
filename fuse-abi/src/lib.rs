@@ -359,7 +359,7 @@ impl TryFrom<u32> for fuse_opcode {
             4096 => Ok(fuse_opcode::CUSE_INIT),
 
             #[cfg(target_os = "android")]
-            2006 => Ok(fuse_opcode::FUSE_CANONICAL_PATH),
+            2016 => Ok(fuse_opcode::FUSE_CANONICAL_PATH),
 
             _ => Err(InvalidOpcodeError),
         }

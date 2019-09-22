@@ -2,7 +2,6 @@
 //!
 //! Raw communication channel to the FUSE kernel driver.
 
-use fuse_sys::fuse_args;
 use libc::{self, c_int, c_void, size_t};
 use log::error;
 use std::ffi::{CStr, CString, OsStr};
@@ -21,19 +20,6 @@ pub struct Channel {
     skip_uninit: bool,
 }
 
-/// Helper function to provide options as a fuse_args struct
-/// (which contains an argc count and an argv pointer)
-fn with_fuse_args<T, F: FnOnce(&fuse_args) -> T>(options: &[&OsStr], f: F) -> T {
-    let mut args = vec![CString::new("rust-fuse").unwrap()];
-    args.extend(options.iter().map(|s| CString::new(s.as_bytes()).unwrap()));
-    let argptrs: Vec<_> = args.iter().map(|s| s.as_ptr()).collect();
-    f(&fuse_args {
-        argc: argptrs.len() as i32,
-        argv: argptrs.as_ptr(),
-        allocated: 0,
-    })
-}
-
 impl Channel {
     /// Create a new communication channel to the kernel driver by mounting the
     /// given path. The kernel driver will delegate filesystem operations of
@@ -42,6 +28,20 @@ impl Channel {
     #[cfg(not(target_os = "android"))]
     pub fn new(mountpoint: &Path, options: &[&OsStr]) -> io::Result<Channel> {
         use fuse_sys::fuse_mount_compat25;
+        use fuse_sys::fuse_args;
+
+        /// Helper function to provide options as a fuse_args struct
+        /// (which contains an argc count and an argv pointer)
+        fn with_fuse_args<T, F: FnOnce(&fuse_args) -> T>(options: &[&OsStr], f: F) -> T {
+            let mut args = vec![CString::new("rust-fuse").unwrap()];
+            args.extend(options.iter().map(|s| CString::new(s.as_bytes()).unwrap()));
+            let argptrs: Vec<_> = args.iter().map(|s| s.as_ptr()).collect();
+            f(&fuse_args {
+                argc: argptrs.len() as i32,
+                argv: argptrs.as_ptr(),
+                allocated: 0,
+            })
+        }
 
         let mountpoint = mountpoint.canonicalize()?;
         with_fuse_args(options, |args| {
@@ -178,11 +178,12 @@ pub fn unmount(mountpoint: &Path) -> io::Result<()> {
         target_os = "dragonfly",
         target_os = "openbsd",
         target_os = "bitrig",
-        target_os = "netbsd"
+        target_os = "netbsd",
+        target_os = "android"
     ))]
     #[inline]
     fn libc_umount(mnt: &CStr) -> c_int {
-        unsafe { libc::unmount(mnt.as_ptr(), 0) }
+        unsafe { libc::umount2(mnt.as_ptr(), 0) }
     }
 
     #[cfg(not(any(
@@ -191,7 +192,8 @@ pub fn unmount(mountpoint: &Path) -> io::Result<()> {
         target_os = "dragonfly",
         target_os = "openbsd",
         target_os = "bitrig",
-        target_os = "netbsd"
+        target_os = "netbsd",
+        target_os = "android"
     )))]
     #[inline]
     fn libc_umount(mnt: &CStr) -> c_int {

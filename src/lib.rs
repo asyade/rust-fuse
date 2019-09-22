@@ -5,24 +5,25 @@
 //! and unmount calls which are needed to establish a fd to talk to the kernel driver.
 
 #![warn(missing_docs, missing_debug_implementations, rust_2018_idioms)]
-use libc::{c_int, ENOSYS};
-use std::convert::AsRef;
-use std::ffi::OsStr;
-use std::io;
-use std::path::Path;
-use std::time::SystemTime;
-use std::os::unix::io::IntoRawFd;
+pub use channel::unmount;
+use channel::Channel;
 pub use fuse_abi::consts;
 pub use fuse_abi::FUSE_ROOT_ID;
+use libc::{c_int, ENOSYS};
 #[cfg(target_os = "macos")]
 pub use reply::ReplyXTimes;
 pub use reply::ReplyXattr;
 pub use reply::{Reply, ReplyAttr, ReplyData, ReplyEmpty, ReplyEntry, ReplyOpen};
 pub use reply::{ReplyBmap, ReplyCreate, ReplyDirectory, ReplyLock, ReplyStatfs, ReplyWrite};
 pub use request::Request;
+use serde_derive::{Deserialize, Serialize};
 pub use session::{BackgroundSession, Session};
-use channel::Channel;
-
+use std::convert::AsRef;
+use std::ffi::OsStr;
+use std::io;
+use std::os::unix::io::IntoRawFd;
+use std::path::Path;
+use std::time::SystemTime;
 mod channel;
 mod ll;
 mod reply;
@@ -30,7 +31,7 @@ mod request;
 mod session;
 
 /// File types
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub enum FileType {
     /// Named pipe (S_IFIFO)
     NamedPipe,
@@ -49,7 +50,7 @@ pub enum FileType {
 }
 
 /// File attributes
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FileAttr {
     /// Inode number
     pub ino: u64,
@@ -569,7 +570,7 @@ pub unsafe fn raw_mount<FS: Filesystem, P: AsRef<Path>>(
     mountpoint: P,
     options: &[&OsStr],
 ) -> io::Result<c_int> {
-    Channel::new(mountpoint.as_ref(), options).map(|ch| { ch.into_raw_fd() })
+    Channel::new(mountpoint.as_ref(), options).map(|ch| ch.into_raw_fd())
 }
 
 /// Mount the given filesystem to the given mountpoint. This function spawns

@@ -293,7 +293,7 @@ pub enum fuse_opcode {
     CUSE_INIT = 4096,
 
     #[cfg(target_os = "android")]
-    FUSE_CANONICAL_PATH = 2006,
+    FUSE_CANONICAL_PATH = 2016,
 }
 
 impl TryFrom<u32> for fuse_opcode {

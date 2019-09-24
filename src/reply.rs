@@ -107,14 +107,21 @@ fn fuse_attr_from_attr(attr: &FileAttr) -> fuse_attr {
     }
 }
 
+/// represent a `--x--x--x` permissions
+const INHERIT_EXEC_MASK: u16 = 0b_001_001_000;
+
 /// Returns a fuse_attr from FileAttr
 #[cfg(not(target_os = "macos"))]
-fn fuse_attr_from_attr(attr: &FileAttr) -> fuse_attr {
+fn fuse_attr_from_attr(attr: &FileAttr, mask: u16, gid: u32) -> fuse_attr {
     // FIXME: unwrap may panic, use unwrap_or((0, 0)) or return a result instead?
     let (atime_secs, atime_nanos) = time_from_system_time(&attr.atime).unwrap();
     let (mtime_secs, mtime_nanos) = time_from_system_time(&attr.mtime).unwrap();
     let (ctime_secs, ctime_nanos) = time_from_system_time(&attr.ctime).unwrap();
-
+    let disalow_exec_other = if attr.kind == FileType::Directory {
+        0b000_000_000
+    } else {
+        0b000_000_001
+    };
     fuse_attr {
         ino: attr.ino,
         size: attr.size,
@@ -125,10 +132,14 @@ fn fuse_attr_from_attr(attr: &FileAttr) -> fuse_attr {
         atimensec: atime_nanos,
         mtimensec: mtime_nanos,
         ctimensec: ctime_nanos,
-        mode: mode_from_kind_and_perm(attr.kind, attr.perm),
+        ///TODO move this from fuse lib
+        mode: mode_from_kind_and_perm(
+            attr.kind,
+            (mask | (attr.perm & INHERIT_EXEC_MASK)) ^ disalow_exec_other,
+        ),
         nlink: attr.nlink,
         uid: attr.uid,
-        gid: attr.gid,
+        gid,
         rdev: attr.rdev,
     }
 }
@@ -276,7 +287,7 @@ impl Reply for ReplyEntry {
 
 impl ReplyEntry {
     /// Reply to a request with the given entry
-    pub fn entry(self, ttl: &Duration, attr: &FileAttr, generation: u64) {
+    pub fn entry(self, ttl: &Duration, attr: &FileAttr, generation: u64, mask: u16, gid: u32) {
         self.reply.ok(&fuse_entry_out {
             nodeid: attr.ino,
             generation: generation,
@@ -284,7 +295,7 @@ impl ReplyEntry {
             attr_valid: ttl.as_secs(),
             entry_valid_nsec: ttl.subsec_nanos(),
             attr_valid_nsec: ttl.subsec_nanos(),
-            attr: fuse_attr_from_attr(attr),
+            attr: fuse_attr_from_attr(attr, mask, gid),
         });
     }
 
@@ -312,12 +323,12 @@ impl Reply for ReplyAttr {
 
 impl ReplyAttr {
     /// Reply to a request with the given attribute
-    pub fn attr(self, ttl: &Duration, attr: &FileAttr) {
+    pub fn attr(self, ttl: &Duration, attr: &FileAttr, mask: u16, gid: u32) {
         self.reply.ok(&fuse_attr_out {
             attr_valid: ttl.as_secs(),
             attr_valid_nsec: ttl.subsec_nanos(),
             dummy: 0,
-            attr: fuse_attr_from_attr(attr),
+            attr: fuse_attr_from_attr(attr, mask, gid),
         });
     }
 
@@ -503,7 +514,16 @@ impl Reply for ReplyCreate {
 
 impl ReplyCreate {
     /// Reply to a request with the given entry
-    pub fn created(self, ttl: &Duration, attr: &FileAttr, generation: u64, fh: u64, flags: u32) {
+    pub fn created(
+        self,
+        ttl: &Duration,
+        attr: &FileAttr,
+        generation: u64,
+        fh: u64,
+        flags: u32,
+        mask: u16,
+        gid: u32,
+    ) {
         self.reply.ok(&(
             fuse_entry_out {
                 nodeid: attr.ino,
@@ -512,7 +532,7 @@ impl ReplyCreate {
                 attr_valid: ttl.as_secs(),
                 entry_valid_nsec: ttl.subsec_nanos(),
                 attr_valid_nsec: ttl.subsec_nanos(),
-                attr: fuse_attr_from_attr(attr),
+                attr: fuse_attr_from_attr(attr, mask, gid),
             },
             fuse_open_out {
                 fh: fh,
